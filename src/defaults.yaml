@@ -1,0 +1,3 @@
+config_paths:
+  - /etc/journaldeliver
+  - null
