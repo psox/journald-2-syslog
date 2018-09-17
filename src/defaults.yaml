@@ -1,3 +1,4 @@
 config_paths:
-  - /etc/journaldeliver
-  - null
+  - /etc/journaldeliver/*.yaml
+  - /usr/share/journaldeliver/*.yaml
+  - /var/lib/journaldeliver/*.yaml
