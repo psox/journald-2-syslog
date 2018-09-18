@@ -3,6 +3,8 @@
         "Debounced",
         "deserialize",
         "journald",
+        "journaldeliver",
+        "journaldelivery",
         "serde",
         "stemmet",
         "syslog"

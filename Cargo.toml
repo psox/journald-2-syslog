@@ -1,5 +1,5 @@
 [package]
-name = "journald-2-syslog"
+name = "journaldeliver"
 version = "0.1.0"
 authors = ["Andre Stemmet <andre.stemmet@jci.com>"]
 edition = "2018"
