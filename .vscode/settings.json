@@ -7,6 +7,7 @@
         "journaldelivery",
         "serde",
         "stemmet",
-        "syslog"
+        "syslog",
+        "vals"
     ]
 }

@@ -1,4 +1,8 @@
-config_paths:
-  - /etc/journaldeliver/*.yaml
-  - /usr/share/journaldeliver/*.yaml
-  - /var/lib/journaldeliver/*.yaml
+configs:
+  - /usr/share/journaldeliver/default.yaml
+  - /var/lib/journaldeliver/default.yaml
+  - /etc/journaldeliver/default.yaml
+verbose: 0
+user: journaldeliver
+group: journaldeliver
+last_cursor_location: /var/lib/journaldeliver/cursor-location.yaml
