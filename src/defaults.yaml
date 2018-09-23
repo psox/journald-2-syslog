@@ -6,3 +6,5 @@ verbose: 0
 user: journaldeliver
 group: journaldeliver
 last_cursor_location: /var/lib/journaldeliver/cursor-location.yaml
+print-config: false
+list-config-files: false
