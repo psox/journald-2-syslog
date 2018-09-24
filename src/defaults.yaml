@@ -1,3 +1,4 @@
+---
 configs:
   - /usr/share/journaldeliver/default.yaml
   - /var/lib/journaldeliver/default.yaml
@@ -8,3 +9,7 @@ group: journaldeliver
 last_cursor_location: /var/lib/journaldeliver/cursor-location.yaml
 print-config: false
 list-config-files: false
+history-duration: 0s
+history-absolute: 2018-01-01T00:00:00Z
+history-count: 0
+history-type: duration

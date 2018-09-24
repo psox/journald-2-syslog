@@ -1,11 +1,13 @@
 #![feature(uniform_paths, try_from)]
 
+use chrono::{DateTime, Duration, Utc};
 use clap::{app_from_crate, crate_authors, crate_description, crate_name, crate_version, Arg};
 use config::{Config, File as ConfigFile, FileFormat, Value as ConfigValue};
-use journald::reader::{JournalReader, JournalReaderConfig, JournalSeek};
+use parse_duration::parse as parse_duration;
 use serde_json::{to_string_pretty as pretty, Map as JsonMap, Value as JsonValue};
 use serde_yaml::{to_string as to_yaml_string, Value as YamlValue};
 use std::{collections::BTreeMap, iter::FromIterator, path::Path};
+use systemd::journal::{Journal, JournalFiles, JournalSeek};
 
 fn get_configs(command_line_args: Config) -> Config {
     // Load the default config file
@@ -108,17 +110,38 @@ fn get_command_line_args() -> Config {
                 .short("g")
                 .takes_value(true)
                 .help("The group to run as."),
+            Arg::with_name("history-duration")
+                .long("history-duration")
+                .visible_alias("time")
+                .alias("hd")
+                .takes_value(true)
+                .conflicts_with_all(&["history-absolute", "history-count"])
+                .help("How much history should be pre-loaded counting back from now."),
+            Arg::with_name("history-absolute")
+                .long("history-absolute")
+                .visible_alias("absolute")
+                .alias("ha")
+                .takes_value(true)
+                .conflicts_with_all(&["history-duration", "history-count"])
+                .help("How much history should be pre-loaded starting at some absolute point in time."),
+            Arg::with_name("history-count")
+                .long("history-count")
+                .visible_alias("count")
+                .alias("hc")
+                .takes_value(true)
+                .conflicts_with_all(&["history-duration", "history-absolute" ])
+                .help("How much history should be pre-loaded with this number of previous records."),
             Arg::with_name("print-config")
                 .long("print-config")
                 .alias("pc")
-                .alias("print")
+                .visible_alias("print")
                 .required_unless_one(&["daemon", "foreground", "list-config-files"])
                 .conflicts_with_all(&["daemon", "foreground", "list-config-files"])
                 .help("Print the merged config used by this application."),
             Arg::with_name("list-config-files")
                 .long("list-config-files")
                 .alias("lcf")
-                .alias("list")
+                .visible_alias("list")
                 .required_unless_one(&["daemon", "foreground", "print-config"])
                 .conflicts_with_all(&["daemon", "foreground", "print-config"])
                 .help("List the config files used by this application."),
@@ -170,7 +193,19 @@ fn get_command_line_args() -> Config {
                         ),
                     ).unwrap();
             }
-            arg_name => panic!("{} not processed having value {:?}", arg_name, arg_value),
+            "history-duration" => {
+                config
+                    .set(
+                        arg_name.into(),
+                        ConfigValue::from(vals.get(0).unwrap().to_str().unwrap()),
+                    ).unwrap()
+                    .set("history-type".into(), ConfigValue::from("duration"))
+                    .unwrap();
+            }
+            arg_name => panic!(
+                "{} not processed having value:- \n{:#?}",
+                arg_name, arg_value
+            ),
         }
     }
     // Return the resultant config
@@ -206,25 +241,52 @@ fn main() {
         );
         return;
     }
-    if false {
-        let journal_reader_config = JournalReaderConfig::default();
-        let mut journal_reader =
-            JournalReader::open(&journal_reader_config).expect("Failed to open journal");
-        journal_reader
-            .seek(JournalSeek::Tail)
-            .expect("Failed to seek to end of journal");
-        let current_entry = journal_reader
-            .previous_entry()
-            .expect("Failed to get previous record")
-            .unwrap();
-        let fields = current_entry.fields;
-        let mut json_map = JsonMap::new();
-        let fields_iter = fields.into_iter();
-        for (fields_key, fields_value) in fields_iter {
-            json_map.insert(fields_key.into(), fields_value.to_string().into());
+
+    let mut journal = Journal::open(JournalFiles::All, false, false).unwrap();
+    match config.get_str("history-type").unwrap().as_str() {
+        "duration" => {
+            let duration = Duration::from_std(
+                parse_duration(config.get_str("history-duration").unwrap().as_str()).unwrap(),
+            ).unwrap();
+            let now: DateTime<Utc> = Utc::now();
+            let mut start_time: u64 = now
+                .checked_sub_signed(duration)
+                .unwrap()
+                .timestamp()
+                .to_string()
+                .parse::<u64>()
+                .unwrap();
+            start_time *= 1_000_000;
+
+            let cursor = journal
+                .seek(JournalSeek::ClockRealtime {
+                    usec: start_time.into(),
+                }).unwrap();
+            let current_entry = journal.timestamp().unwrap();
+
+            println!("{:#?}", current_entry);
+            println!("{:#?}", cursor);
+            return;
         }
-        let json_value: JsonValue = json_map.into();
-        let json_string = pretty(&json_value).unwrap();
-        println!("{}", json_string);
+        history_type => panic!("{} is not a valid history-type!", history_type),
     }
+
+    // if false {
+    //     journal_reader
+    //         .seek(JournalSeek::Tail)
+    //         .expect("Failed to seek to end of journal");
+    //     let current_entry = journal_reader
+    //         .previous_entry()
+    //         .expect("Failed to get previous record")
+    //         .unwrap();
+    //     let fields = current_entry.fields;
+    //     let mut json_map = JsonMap::new();
+    //     let fields_iter = fields.into_iter();
+    //     for (fields_key, fields_value) in fields_iter {
+    //         json_map.insert(fields_key.into(), fields_value.to_string().into());
+    //     }
+    //     let json_value: JsonValue = json_map.into();
+    //     let json_string = pretty(&json_value).unwrap();
+    //     println!("{}", json_string);
+    // }
 }

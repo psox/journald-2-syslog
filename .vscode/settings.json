@@ -1,6 +1,8 @@
 {
     "cSpell.words": [
         "Debounced",
+        "Realtime",
+        "chrono",
         "deserialize",
         "journald",
         "journaldeliver",
@@ -8,6 +10,8 @@
         "serde",
         "stemmet",
         "syslog",
+        "systemd",
+        "usec",
         "vals"
     ]
 }
