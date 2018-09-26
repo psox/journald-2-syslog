@@ -5,9 +5,9 @@ authors = ["Andre Stemmet <andre.stemmet@jci.com>"]
 edition = "2018"
 
 [dependencies]
-config = "0.9.0"
-serde_yaml = "0.8.4"
-serde_json = "1.0.27"
+config = "0.9.1"
+serde_yaml = "0.8.5"
+serde_json = "1.0.31"
 clap = "2.32.0"
 systemd = "0.3.0"
 syslog = "4.0.1"
@@ -15,3 +15,4 @@ lazy_static = "1.1.0"
 notify = "4.0.6"
 parse_duration = "1.0.1"
 chrono = "0.4.6"
+failure = "0.1.2"

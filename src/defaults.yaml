@@ -6,10 +6,10 @@ configs:
 verbose: 0
 user: journaldeliver
 group: journaldeliver
-last_cursor_location: /var/lib/journaldeliver/cursor-location.yaml
+last-cursor-location: /var/lib/journaldeliver/cursor-location.yaml
 print-config: false
 list-config-files: false
 history-duration: 0s
 history-absolute: 2018-01-01T00:00:00Z
 history-count: 0
-history-type: duration
+history-type: count
