@@ -4,8 +4,6 @@ configs:
   - /var/lib/journaldeliver/default.yaml
   - /etc/journaldeliver/default.yaml
 verbose: 0
-user: journaldeliver
-group: journaldeliver
 last-cursor-location: /var/lib/journaldeliver/cursor-location.yaml
 print-config: false
 list-config-files: false
@@ -13,3 +11,7 @@ history-duration: 0s
 history-absolute: 2018-01-01T00:00:00Z
 history-count: 0
 history-type: count
+host-name: 127.0.0.1
+host-port: 9000
+host-type: filebeat
+host-protocol: tcp

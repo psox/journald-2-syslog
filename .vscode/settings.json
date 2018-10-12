@@ -1,8 +1,14 @@
 {
+    "[rust]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 3,
+        "editor.detectIndentation": false
+    },
     "cSpell.words": [
         "Debounced",
         "Realtime",
         "chrono",
+        "clippy",
         "deserialize",
         "journald",
         "journaldeliver",
@@ -13,5 +19,12 @@
         "systemd",
         "usec",
         "vals"
-    ]
+    ],
+    "editor.formatOnPaste": true,
+    "editor.formatOnSaveTimeout": 100,
+    "editor.formatOnType": true,
+    "files.autoSave": "afterDelay",
+    "files.autoSaveDelay": 7000,
+    "files.hotExit": "onExitAndWindowClose",
+    "projects.indentationSpaces": 3,
 }
