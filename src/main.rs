@@ -2,11 +2,15 @@
 #![allow(unknown_lints)]
 #![warn(clippy::all)]
 
+#[macro_use]
+extern crate lazy_static;
+
 use chrono::{
    DateTime,
    Duration,
    Utc,
 };
+
 use clap::{
    app_from_crate,
    crate_authors,
@@ -22,21 +26,33 @@ use config::{
    FileFormat,
    Value as ConfigValue,
 };
+
 use failure::Error as FailError;
+
 use parse_duration::parse as parse_duration;
 
-// use serde_json::{to_string_pretty as pretty, Map as JsonMap, Value as
-// JsonValue};
+use serde_json::{
+   Map as JsonMap,
+   Value as JsonValue,
+};
+
 use serde_yaml::{
    to_string as to_yaml_string,
    Value as YamlValue,
 };
+
 use std::{
    collections::BTreeMap,
    iter::FromIterator,
    path::Path,
    result::Result as StdResult,
+   sync::{
+      mpsc,
+      Mutex as StdMutex,
+   },
+   thread,
 };
+
 use systemd::journal::{
    Journal,
    JournalFiles,
@@ -44,6 +60,36 @@ use systemd::journal::{
 };
 
 type Result<T,> = StdResult<T, FailError,>;
+
+lazy_static! {
+   static ref CURSOR: StdMutex<String,> = StdMutex::new(String::default());
+}
+
+fn read_write_cursor_thread(
+   path : &str,
+   cursor_exists : &mpsc::Sender<bool,>,
+) 
+{
+   let mut cursor_config = Config::default();
+   if Path::new(&path,).exists()
+   {
+      cursor_config.merge(ConfigFile::with_name(&path,),).unwrap();
+      let mut cursor = CURSOR
+         .lock()
+         .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
+         .unwrap();
+      *cursor = cursor_config.get_str("cursor",).unwrap_or_default();
+      cursor_exists.send(*cursor == String::default(),).unwrap();
+   }
+   else
+   {
+      cursor_exists.send(false,).unwrap();
+   }
+   loop
+   {
+      thread::sleep(Duration::seconds(3,).to_std().unwrap(),);
+   }
+}
 
 fn get_configs(command_line_args : Config) -> Result<Config,>
 {
@@ -72,7 +118,6 @@ fn get_configs(command_line_args : Config) -> Result<Config,>
          .map(|config_file| {
             (config_file.try_into::<String>().unwrap(), {
                pos += 1;
-
                pos
             },)
          },)
@@ -194,13 +239,39 @@ fn get_command_line_args() -> Result<Config,>
                Arg::with_name("host-name",)
                   .long("host-name",)
                   .visible_alias("hn",)
-                  .short("H",)
+                  .short("h",)
+                  .takes_value(true,)
                   .help("The host name or IP where data should be sent.",),
                Arg::with_name("host-port",)
                   .long("host-port",)
                   .visible_alias("hp",)
-                  .short("P",)
+                  .short("p",)
+                  .takes_value(true,)
+                  .validator(|value| {
+                     let port = value.as_str().parse::<u16>().unwrap_or(0,);
+                     if port > 0 && port < 65535
+                     {
+                        return Ok((),);
+                     }
+                     Err(String::from(
+                        "The port should be an integer between 1 and 65534.",
+                     ),)
+                  },)
                   .help("The host port number where data should be sent.",),
+               Arg::with_name("host-type",)
+                  .long("host-type",)
+                  .visible_alias("ht",)
+                  .short("t",)
+                  .takes_value(true,)
+                  .possible_values(&["filebeat",],)
+                  .help("The type of the remote host to send data too.",),
+               Arg::with_name("host-protocol",)
+                  .long("host-protocol",)
+                  .visible_alias("pr",)
+                  .short("P",)
+                  .possible_values(&["tcp", "udp",],)
+                  .takes_value(true,)
+                  .help("The host protocol to use.",),
             ],
          )
          .get_matches();
@@ -227,6 +298,21 @@ fn get_command_line_args() -> Result<Config,>
                ),
             )?;
          },
+         "host-port" =>
+         {
+            config.set(
+               arg_name,
+               ConfigValue::from(
+                  vals
+                     .get(0,)
+                     .unwrap()
+                     .to_str()
+                     .unwrap()
+                     .to_string()
+                     .parse::<i64>()?,
+               ),
+            )?;
+         },
          "list-config-files" | "print-config" =>
          {
             config.set(arg_name, ConfigValue::from(true,),)?;
@@ -235,6 +321,14 @@ fn get_command_line_args() -> Result<Config,>
          {
             config.set("run_mode", ConfigValue::from(arg_name.to_string(),),)?;
          },
+         "host-name" | "host-type" | "host-protocol" =>
+         {
+            config.set(
+               arg_name,
+               ConfigValue::from(vals.get(0,).unwrap().to_str().unwrap(),),
+            )?;
+         },
+
          "configs" =>
          {
             config.set(
@@ -285,7 +379,8 @@ fn get_command_line_args() -> Result<Config,>
          arg_name =>
          {
             panic!(
-               "{} not processed having value:- \n{:#?}",
+               "\nOh Shoot!\nI forgot to write code to process '{}' having the value of:- \n{:#?} \
+                at ",
                arg_name, arg_value
             )
          },
@@ -301,6 +396,11 @@ fn main_wrapper() -> Result<(),>
    let command_line_args = get_command_line_args()?;
 
    let config = get_configs(command_line_args,)?;
+   let cursor_location_file = config.get_str("last-cursor-location",)?;
+   let (cursor_exists_sender, cursor_exists_receiver,) = mpsc::channel::<bool,>();
+   let _join_handle = thread::spawn(move || {
+      read_write_cursor_thread(cursor_location_file.as_str(), &cursor_exists_sender,)
+   },);
 
    if config.get_int("verbose",).unwrap_or(0,) >= 5
    {
@@ -329,77 +429,101 @@ fn main_wrapper() -> Result<(),>
       return Ok((),);
    }
 
-   let _cursor_location_file = config.get_str("last-cursor-location",)?;
-
    let mut journal = Journal::open(JournalFiles::All, false, false,)?;
 
-   match config.get_str("history-type",)?.as_str()
+   println!("Main: {}", Utc::now());
+   // Seek to an appropriate postion if the cursor is not set
+   if cursor_exists_receiver.recv().unwrap()
    {
-      "duration" =>
+      let cursor_value = CURSOR.lock().unwrap();
+      journal
+         .seek(JournalSeek::Cursor {
+            cursor : cursor_value.to_string(),
+         },)
+         .unwrap();
+   }
+   else
+   {
+      match config.get_str("history-type",)?.as_str()
       {
-         let duration = Duration::from_std(parse_duration(
-            config.get_str("history-duration",)?.as_str(),
-         )?,)?;
-
-         if duration != Duration::seconds(0,)
+         "duration" =>
          {
-            let now : DateTime<Utc,> = Utc::now();
+            let duration = Duration::from_std(parse_duration(
+               config.get_str("history-duration",)?.as_str(),
+            )?,)?;
 
-            let start_time : u64 = now
-               .checked_sub_signed(duration,)
-               .unwrap()
+            if duration != Duration::seconds(0,)
+            {
+               let now : DateTime<Utc,> = Utc::now();
+
+               let start_time : u64 = now
+                  .checked_sub_signed(duration,)
+                  .unwrap()
+                  .timestamp()
+                  .to_string()
+                  .parse::<u64>()?
+                  * 1_000_000;
+
+               journal.seek(JournalSeek::ClockRealtime {
+                  usec : start_time,
+               },)?;
+            }
+            else
+            {
+               journal.seek(JournalSeek::Tail,)?;
+            }
+         },
+         "absolute" =>
+         {
+            let absolute = config
+               .get_str("history-absolute",)?
+               .as_str()
+               .parse::<DateTime<Utc,>>()?
                .timestamp()
                .to_string()
                .parse::<u64>()?
                * 1_000_000;
 
             journal.seek(JournalSeek::ClockRealtime {
-               usec : start_time,
+               usec : absolute,
             },)?;
-         }
-         else
+         },
+         "count" =>
          {
-            journal.seek(JournalSeek::Tail,)?;
-         }
-      },
-      "absolute" =>
-      {
-         let absolute = config
-            .get_str("history-absolute",)?
-            .as_str()
-            .parse::<DateTime<Utc,>>()?
-            .timestamp()
-            .to_string()
-            .parse::<u64>()?
-            * 1_000_000;
+            let count : i64 = config.get_int("history-count",)?;
 
-         journal.seek(JournalSeek::ClockRealtime {
-            usec : absolute,
-         },)?;
-      },
-      "count" =>
-      {
-         let count : i64 = config.get_int("history-count",)?;
+            if count > 0
+            {
+               journal.seek(JournalSeek::Head,)?;
 
-         if count > 0
-         {
-            journal.seek(JournalSeek::Head,)?;
+               (0 .. count).for_each(|_| {
+                  journal.next_record().unwrap();
+               },);
+            }
+            else
+            {
+               journal.seek(JournalSeek::Tail,)?;
 
-            (0 .. count).for_each(|_| {
-               journal.next_record().unwrap();
-            },);
-         }
-         else
-         {
-            journal.seek(JournalSeek::Tail,)?;
-
-            (count .. 0).for_each(|_| {
-               journal.previous_record().unwrap();
-            },);
-         }
-      },
-      history_type => panic!("{} is not a valid history-type!", history_type),
+               (count .. 0).for_each(|_| {
+                  journal.previous_record().unwrap();
+               },);
+            }
+         },
+         history_type => panic!("{} is not a valid history-type!", history_type),
+      }
    }
+
+   println!("Main: {}", Utc::now());
+   journal.watch_all_elements(|record| {
+      let mut json_map = JsonMap::new();
+      record.into_iter().for_each(|(record_key, record_value,)| {
+         json_map.insert(record_key, record_value.into(),);
+      },);
+      let json_value : JsonValue = json_map.into();
+      let json_string = json_value.to_string();
+      println!("{}", json_string);
+      Ok((),)
+   },)?;
 
    // if false {
    //     journal_reader

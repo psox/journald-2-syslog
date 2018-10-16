@@ -6,6 +6,7 @@
     },
     "cSpell.words": [
         "Debounced",
+        "Mutex",
         "Realtime",
         "chrono",
         "clippy",
