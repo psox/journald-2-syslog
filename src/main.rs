@@ -68,7 +68,7 @@ lazy_static! {
 fn read_write_cursor_thread(
    path : &str,
    cursor_exists : &mpsc::Sender<bool,>,
-) 
+)
 {
    let mut cursor_config = Config::default();
    if Path::new(&path,).exists()
@@ -165,116 +165,112 @@ fn get_command_line_args() -> Result<Config,>
    let mut config = Config::default();
 
    // Get the Arguments from the command line
-   let app_matches =
-      app_from_crate!()
-         .args(
-            &[
-               Arg::with_name("configs",)
-                  .short("c",)
-                  .long("configs",)
-                  .alias("config",)
-                  .multiple(true,)
-                  .takes_value(true,)
-                  .help("Takes one or more configs files.",)
-                  .long_help(include_str!("config_help.txt"),),
-               Arg::with_name("daemon",)
-                  .long("daemon",)
-                  .short("d",)
-                  .required_unless_one(&["foreground", "print-config", "list-config-files",],)
-                  .conflicts_with_all(&["foreground", "print-config", "list-config-files",],)
-                  .help("Run the application in the background.",),
-               Arg::with_name("foreground",)
-                  .long("foreground",)
-                  .short("f",)
-                  .required_unless_one(&["daemon", "print-config", "list-config-files",],)
-                  .conflicts_with_all(&["daemon", "print-config", "list-config-files",],)
-                  .help("Run the application in the foreground.",),
-               Arg::with_name("verbose",)
-                  .long("verbose",)
-                  .short("v",)
-                  .help("Provide more detailed information",)
-                  .takes_value(true,)
-                  .possible_values(&["0", "1", "2", "3", "4", "5", "6", "7", "8", "9",],)
-                  .default_value("1",),
-               Arg::with_name("history-duration",)
-                  .long("history-duration",)
-                  .visible_alias("time",)
-                  .alias("hd",)
-                  .takes_value(true,)
-                  .conflicts_with_all(&["history-absolute", "history-count",],)
-                  .help("How much history should be pre-loaded counting back from now.",),
-               Arg::with_name("history-absolute",)
-                  .long("history-absolute",)
-                  .visible_alias("absolute",)
-                  .alias("ha",)
-                  .takes_value(true,)
-                  .conflicts_with_all(&["history-duration", "history-count",],)
-                  .help(
-                     "How much history should be pre-loaded starting at some absolute point in \
-                      time.",
-                  ),
-               Arg::with_name("history-count",)
-                  .long("history-count",)
-                  .visible_alias("count",)
-                  .alias("hc",)
-                  .takes_value(true,)
-                  .conflicts_with_all(&["history-duration", "history-absolute",],)
-                  .help(
-                     "How much history should be pre-loaded with this number of previous records.",
-                  ),
-               Arg::with_name("print-config",)
-                  .long("print-config",)
-                  .alias("pc",)
-                  .visible_alias("print",)
-                  .required_unless_one(&["daemon", "foreground", "list-config-files",],)
-                  .conflicts_with_all(&["daemon", "foreground", "list-config-files",],)
-                  .help("Print the merged config used by this application.",),
-               Arg::with_name("list-config-files",)
-                  .long("list-config-files",)
-                  .alias("lcf",)
-                  .visible_alias("list",)
-                  .required_unless_one(&["daemon", "foreground", "print-config",],)
-                  .conflicts_with_all(&["daemon", "foreground", "print-config",],)
-                  .help("List the config files used by this application.",),
-               Arg::with_name("host-name",)
-                  .long("host-name",)
-                  .visible_alias("hn",)
-                  .short("h",)
-                  .takes_value(true,)
-                  .help("The host name or IP where data should be sent.",),
-               Arg::with_name("host-port",)
-                  .long("host-port",)
-                  .visible_alias("hp",)
-                  .short("p",)
-                  .takes_value(true,)
-                  .validator(|value| {
-                     let port = value.as_str().parse::<u16>().unwrap_or(0,);
-                     if port > 0 && port < 65535
-                     {
-                        return Ok((),);
-                     }
-                     Err(String::from(
-                        "The port should be an integer between 1 and 65534.",
-                     ),)
-                  },)
-                  .help("The host port number where data should be sent.",),
-               Arg::with_name("host-type",)
-                  .long("host-type",)
-                  .visible_alias("ht",)
-                  .short("t",)
-                  .takes_value(true,)
-                  .possible_values(&["filebeat",],)
-                  .help("The type of the remote host to send data too.",),
-               Arg::with_name("host-protocol",)
-                  .long("host-protocol",)
-                  .visible_alias("pr",)
-                  .short("P",)
-                  .possible_values(&["tcp", "udp",],)
-                  .takes_value(true,)
-                  .help("The host protocol to use.",),
-            ],
-         )
-         .get_matches();
+   let app_matches = app_from_crate!()
+      .args(&[
+         Arg::with_name("configs",)
+            .short("c",)
+            .long("configs",)
+            .alias("config",)
+            .multiple(true,)
+            .takes_value(true,)
+            .help("Takes one or more configs files.",)
+            .long_help(include_str!("config_help.txt"),),
+         Arg::with_name("daemon",)
+            .long("daemon",)
+            .short("d",)
+            .required_unless_one(&["foreground", "print-config", "list-config-files",],)
+            .conflicts_with_all(&["foreground", "print-config", "list-config-files",],)
+            .help("Run the application in the background.",),
+         Arg::with_name("foreground",)
+            .long("foreground",)
+            .short("f",)
+            .required_unless_one(&["daemon", "print-config", "list-config-files",],)
+            .conflicts_with_all(&["daemon", "print-config", "list-config-files",],)
+            .help("Run the application in the foreground.",),
+         Arg::with_name("verbose",)
+            .long("verbose",)
+            .short("v",)
+            .help("Provide more detailed information",)
+            .takes_value(true,)
+            .possible_values(&["0", "1", "2", "3", "4", "5", "6", "7", "8", "9",],)
+            .default_value("1",),
+         Arg::with_name("history-duration",)
+            .long("history-duration",)
+            .visible_alias("time",)
+            .alias("hd",)
+            .takes_value(true,)
+            .conflicts_with_all(&["history-absolute", "history-count",],)
+            .help("How much history should be pre-loaded counting back from now.",),
+         Arg::with_name("history-absolute",)
+            .long("history-absolute",)
+            .visible_alias("absolute",)
+            .alias("ha",)
+            .takes_value(true,)
+            .conflicts_with_all(&["history-duration", "history-count",],)
+            .help(
+               "How much history should be pre-loaded starting at some absolute point in time. \
+                (YYYY-MM-DD T HH:mm:SS + TZ)",
+            ),
+         Arg::with_name("history-count",)
+            .long("history-count",)
+            .visible_alias("count",)
+            .alias("hc",)
+            .takes_value(true,)
+            .allow_hyphen_values(true,)
+            .conflicts_with_all(&["history-duration", "history-absolute",],)
+            .help("How much history should be pre-loaded with this number of previous records.",),
+         Arg::with_name("print-config",)
+            .long("print-config",)
+            .alias("pc",)
+            .visible_alias("print",)
+            .required_unless_one(&["daemon", "foreground", "list-config-files",],)
+            .conflicts_with_all(&["daemon", "foreground", "list-config-files",],)
+            .help("Print the merged config used by this application.",),
+         Arg::with_name("list-config-files",)
+            .long("list-config-files",)
+            .alias("lcf",)
+            .visible_alias("list",)
+            .required_unless_one(&["daemon", "foreground", "print-config",],)
+            .conflicts_with_all(&["daemon", "foreground", "print-config",],)
+            .help("List the config files used by this application.",),
+         Arg::with_name("host-name",)
+            .long("host-name",)
+            .visible_alias("hn",)
+            .short("h",)
+            .takes_value(true,)
+            .help("The host name or IP where data should be sent.",),
+         Arg::with_name("host-port",)
+            .long("host-port",)
+            .visible_alias("hp",)
+            .short("p",)
+            .takes_value(true,)
+            .validator(|value| {
+               let port = value.as_str().parse::<u16>().unwrap_or(0,);
+               if port > 0 && port < 65535
+               {
+                  return Ok((),);
+               }
+               Err(String::from(
+                  "The port should be an integer between 1 and 65534.",
+               ),)
+            },)
+            .help("The host port number where data should be sent.",),
+         Arg::with_name("host-type",)
+            .long("host-type",)
+            .visible_alias("ht",)
+            .short("t",)
+            .takes_value(true,)
+            .possible_values(&["filebeat",],)
+            .help("The type of the remote host to send data too.",),
+         Arg::with_name("host-protocol",)
+            .long("host-protocol",)
+            .visible_alias("pr",)
+            .short("P",)
+            .possible_values(&["tcp", "udp",],)
+            .takes_value(true,)
+            .help("The host protocol to use.",),
+      ],)
+      .get_matches();
 
    // Process all the arguments presented
    for (arg_name, arg_value,) in app_matches.args.into_iter()
@@ -429,9 +425,8 @@ fn main_wrapper() -> Result<(),>
       return Ok((),);
    }
 
-   let mut journal = Journal::open(JournalFiles::All, false, false,)?;
+   let mut journal = Journal::open(JournalFiles::All, false, true,)?;
 
-   println!("Main: {}", Utc::now());
    // Seek to an appropriate postion if the cursor is not set
    if cursor_exists_receiver.recv().unwrap()
    {
@@ -447,6 +442,7 @@ fn main_wrapper() -> Result<(),>
       match config.get_str("history-type",)?.as_str()
       {
          "duration" =>
+         // TODO: This logic may not work
          {
             let duration = Duration::from_std(parse_duration(
                config.get_str("history-duration",)?.as_str(),
@@ -472,8 +468,9 @@ fn main_wrapper() -> Result<(),>
             {
                journal.seek(JournalSeek::Tail,)?;
             }
-         },
+         }
          "absolute" =>
+         // TODO: This logic may not work
          {
             let absolute = config
                .get_str("history-absolute",)?
@@ -487,7 +484,7 @@ fn main_wrapper() -> Result<(),>
             journal.seek(JournalSeek::ClockRealtime {
                usec : absolute,
             },)?;
-         },
+         }
          "count" =>
          {
             let count : i64 = config.get_int("history-count",)?;
@@ -495,54 +492,110 @@ fn main_wrapper() -> Result<(),>
             if count > 0
             {
                journal.seek(JournalSeek::Head,)?;
+               // Make sure we are at the begining
+               loop
+               {
+                  if let Ok(None,) = journal.previous_record()
+                  {
+                     break;
+                  }
+               }
+
+               for _ in 0 .. count
+               {
+                  if let Ok(None,) = journal.next_record()
+                  {
+                     break;
+                  }
+               }
 
                (0 .. count).for_each(|_| {
                   journal.next_record().unwrap();
                },);
             }
+            else if count < 0
+            {
+               journal.seek(JournalSeek::Tail,)?;
+               // Tail does not always go to the end
+               loop
+               {
+                  if let Ok(None,) = journal.next_record()
+                  {
+                     break;
+                  }
+               }
+
+               for _ in count .. 0
+               {
+                  if let Ok(None,) = journal.previous_record()
+                  {
+                     break;
+                  }
+               }
+            }
             else
             {
                journal.seek(JournalSeek::Tail,)?;
-
-               (count .. 0).for_each(|_| {
-                  journal.previous_record().unwrap();
-               },);
+               // Tail does not always go to the end
+               loop
+               {
+                  if let Ok(None,) = journal.next_record()
+                  {
+                     break;
+                  }
+               }
             }
          },
          history_type => panic!("{} is not a valid history-type!", history_type),
       }
    }
-
-   println!("Main: {}", Utc::now());
-   journal.watch_all_elements(|record| {
-      let mut json_map = JsonMap::new();
-      record.into_iter().for_each(|(record_key, record_value,)| {
-         json_map.insert(record_key, record_value.into(),);
+   loop
+   {
+      let mut broken_count : i64 = 0;
+      let record_option = journal.await_next_record(None,).unwrap_or_else(|_| {
+         // See comment v below v
+         thread::sleep(Duration::seconds(7,).to_std().unwrap(),);
+         broken_count += 1;
+         None
       },);
-      let json_value : JsonValue = json_map.into();
-      let json_string = json_value.to_string();
-      println!("{}", json_string);
-      Ok((),)
-   },)?;
-
-   // if false {
-   //     journal_reader
-   //         .seek(JournalSeek::Tail)
-   //         .expect("Failed to seek to end of journal");
-   //     let current_entry = journal_reader
-   //         .previous_entry()
-   //         .expect("Failed to get previous record")
-   //         .unwrap();
-   //     let fields = current_entry.fields;
-   //     let mut json_map = JsonMap::new();
-   //     let fields_iter = fields.into_iter();
-   //     for (fields_key, fields_value) in fields_iter {
-   //         json_map.insert(fields_key.into(), fields_value.to_string().into());
-   //     }
-   //     let json_value: JsonValue = json_map.into();
-   //     let json_string = pretty(&json_value).unwrap();
-   //     println!("{}", json_string);
-   // }
+      match record_option
+      {
+         None =>
+         {
+            // This implies number of days from Duration::seconds(^ see above ^)
+            if broken_count > 86400
+            {
+               break;
+            }
+            else
+            {
+               continue;
+            }
+         },
+         Some(record,) =>
+         {
+            broken_count = 0;
+            let timestamp : DateTime<Utc,> = journal
+               .timestamp()
+               .unwrap_or_else(|_| Utc::now().into(),)
+               .into();
+            let cursor = journal.cursor().unwrap_or_default();
+            if cursor == String::default()
+            {
+               continue;
+            }
+            let mut json_map = JsonMap::new();
+            json_map.insert("_CURSOR".into(), cursor.into(),);
+            json_map.insert("@timestamp".into(), timestamp.to_rfc3339().into(),);
+            record.into_iter().for_each(|(record_key, record_value,)| {
+               json_map.insert(record_key, record_value.into(),);
+            },);
+            let json_value : JsonValue = json_map.into();
+            let json_string = serde_json::to_string(&json_value,)?;
+            println!("{}", json_string);
+         },
+      };
+   }
 
    Ok((),)
 }
