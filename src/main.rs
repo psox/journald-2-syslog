@@ -596,7 +596,8 @@ fn main_wrapper() -> Result<(),>
                      .replace("_", ".",)
                      .to_lowercase()
                      .trim_left_matches('.',)
-                     .replace("source", "originator",),
+                     .replace("source", "originator",)
+                     .replace("message.", "originator.",),
                   record_value.into(),
                );
             },);
