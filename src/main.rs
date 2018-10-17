@@ -1,4 +1,4 @@
-#![feature(uniform_paths, try_from)]
+#![feature(uniform_paths, try_from, stmt_expr_attributes)]
 #![allow(unknown_lints)]
 #![warn(clippy::all)]
 
@@ -574,21 +574,31 @@ fn main_wrapper() -> Result<(),>
          },
          Some(record,) =>
          {
+            #[allow(unused_assignments)]
             broken_count = 0;
             let timestamp : DateTime<Utc,> = journal
                .timestamp()
                .unwrap_or_else(|_| Utc::now().into(),)
                .into();
+            let timestamp_str = timestamp.to_rfc3339().replace("+00:00", "Z",);
             let cursor = journal.cursor().unwrap_or_default();
             if cursor == String::default()
             {
                continue;
             }
             let mut json_map = JsonMap::new();
-            json_map.insert("_CURSOR".into(), cursor.into(),);
-            json_map.insert("@timestamp".into(), timestamp.to_rfc3339().into(),);
+            json_map.insert("@timestamp".into(), timestamp_str.clone().into(),);
+            json_map.insert("journald.timestamp".into(), timestamp_str.into(),);
+            json_map.insert("journald.cursor".into(), cursor.into(),);
             record.into_iter().for_each(|(record_key, record_value,)| {
-               json_map.insert(record_key, record_value.into(),);
+               json_map.insert(
+                  record_key
+                     .replace("_", ".",)
+                     .to_lowercase()
+                     .trim_left_matches('.',)
+                     .replace("source", "originator",),
+                  record_value.into(),
+               );
             },);
             let json_value : JsonValue = json_map.into();
             let json_string = serde_json::to_string(&json_value,)?;
