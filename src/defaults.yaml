@@ -3,7 +3,7 @@ configs:
   - /usr/share/journaldeliver/default.yaml
   - /var/lib/journaldeliver/default.yaml
   - /etc/journaldeliver/default.yaml
-verbose: 0
+verbose: 1
 last-cursor-location: /var/lib/journaldeliver/cursor-location.yaml
 print-config: false
 list-config-files: false

@@ -5,6 +5,9 @@
 #[macro_use]
 extern crate lazy_static;
 
+#[macro_use]
+extern crate serde_derive;
+
 use chrono::{
    DateTime,
    Duration,
@@ -37,12 +40,15 @@ use serde_json::{
 };
 
 use serde_yaml::{
+   from_reader as yaml_from_reader,
    to_string as to_yaml_string,
+   to_writer as yaml_to_writer,
    Value as YamlValue,
 };
 
 use std::{
    collections::BTreeMap,
+   fs::OpenOptions,
    iter::FromIterator,
    path::Path,
    result::Result as StdResult,
@@ -60,9 +66,16 @@ use systemd::journal::{
 };
 
 type Result<T,> = StdResult<T, FailError,>;
+// type YamlResult<T,> = serde_yaml::Result<T,>;
+
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+struct CursorRecord
+{
+   position : String,
+}
 
 lazy_static! {
-   static ref CURSOR: StdMutex<String,> = StdMutex::new(String::default());
+   static ref CURSOR: StdMutex<CursorRecord,> = StdMutex::new(CursorRecord::default());
 }
 
 fn read_write_cursor_thread(
@@ -70,16 +83,23 @@ fn read_write_cursor_thread(
    cursor_exists : &mpsc::Sender<bool,>,
 )
 {
-   let mut cursor_config = Config::default();
-   if Path::new(&path,).exists()
+   let cursor_file = OpenOptions::new()
+      .read(true,)
+      .write(true,)
+      .create(true,)
+      .open(&path,)
+      .unwrap_or_else(|error| panic!("{:#?}\nwhile trying to open file: {}", error, &path),);
+   let mut old_cursor_value = CursorRecord::default();
+   let mut local_cursor_value : CursorRecord = yaml_from_reader(&cursor_file,).unwrap_or_default();
+   if local_cursor_value != old_cursor_value
    {
-      cursor_config.merge(ConfigFile::with_name(&path,),).unwrap();
-      let mut cursor = CURSOR
+      let mut global_cursor_value = CURSOR
          .lock()
          .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
          .unwrap();
-      *cursor = cursor_config.get_str("cursor",).unwrap_or_default();
-      cursor_exists.send(*cursor == String::default(),).unwrap();
+      *global_cursor_value = local_cursor_value.clone();
+      old_cursor_value = local_cursor_value.clone();
+      cursor_exists.send(true,).unwrap();
    }
    else
    {
@@ -88,6 +108,20 @@ fn read_write_cursor_thread(
    loop
    {
       thread::sleep(Duration::seconds(3,).to_std().unwrap(),);
+      {
+         let global_cursor_value = CURSOR
+            .lock()
+            .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
+            .unwrap()
+            .clone();
+         local_cursor_value = global_cursor_value;
+      }
+      if local_cursor_value != old_cursor_value
+      {
+         cursor_file.set_len(0,).unwrap_or_default();
+         yaml_to_writer(&cursor_file, &local_cursor_value,).unwrap_or((),);
+         old_cursor_value = local_cursor_value;
+      }
    }
 }
 
@@ -277,6 +311,7 @@ fn get_command_line_args() -> Result<Config,>
    {
       let vals = &arg_value.vals;
 
+      #[allow(clippy::get_unwrap)]
       match arg_name
       {
          "verbose" =>
@@ -315,7 +350,7 @@ fn get_command_line_args() -> Result<Config,>
          },
          "daemon" | "foreground" =>
          {
-            config.set("run_mode", ConfigValue::from(arg_name.to_string(),),)?;
+            config.set("run-mode", ConfigValue::from(arg_name.to_string(),),)?;
          },
          "host-name" | "host-type" | "host-protocol" =>
          {
@@ -392,22 +427,25 @@ fn main_wrapper() -> Result<(),>
    let command_line_args = get_command_line_args()?;
 
    let config = get_configs(command_line_args,)?;
+   let verbose = config.get_int("verbose",).unwrap_or(0,);
+   let mut local_cursor_value = CursorRecord::default();
    let cursor_location_file = config.get_str("last-cursor-location",)?;
    let (cursor_exists_sender, cursor_exists_receiver,) = mpsc::channel::<bool,>();
-   let _join_handle = thread::spawn(move || {
+   let thread_builder = thread::Builder::new().name("read_write_cursor_thread".into(),);
+   let _join_handle = thread_builder.spawn(move || {
       read_write_cursor_thread(cursor_location_file.as_str(), &cursor_exists_sender,)
    },);
 
-   if config.get_int("verbose",).unwrap_or(0,) >= 5
+   if verbose >= 5
    {
-      println!("{:#?}", config);
+      eprintln!("{:#?}", config);
    }
 
    if config.get_bool("list-config-files",).unwrap_or(false,)
    {
       for filename in config.get_array("configs",).unwrap_or_default().into_iter()
       {
-         println!(
+         eprintln!(
             "{}",
             filename
                .try_into::<String>()
@@ -430,12 +468,12 @@ fn main_wrapper() -> Result<(),>
    // Seek to an appropriate postion if the cursor is not set
    if cursor_exists_receiver.recv().unwrap()
    {
-      let cursor_value = CURSOR.lock().unwrap();
-      journal
+      let global_cursor_value = CURSOR.lock().unwrap().clone();;
+      local_cursor_value.position = journal
          .seek(JournalSeek::Cursor {
-            cursor : cursor_value.to_string(),
+            cursor : global_cursor_value.position,
          },)
-         .unwrap();
+         .unwrap_or_default();
    }
    else
    {
@@ -485,6 +523,7 @@ fn main_wrapper() -> Result<(),>
                usec : absolute,
             },)?;
          }
+         // TODO:  Verify this works
          "count" =>
          {
             let count : i64 = config.get_int("history-count",)?;
@@ -589,7 +628,7 @@ fn main_wrapper() -> Result<(),>
             let mut json_map = JsonMap::new();
             json_map.insert("@timestamp".into(), timestamp_str.clone().into(),);
             json_map.insert("journald.timestamp".into(), timestamp_str.into(),);
-            json_map.insert("journald.cursor".into(), cursor.into(),);
+            json_map.insert("journald.cursor".into(), cursor.clone().into(),);
             record.into_iter().for_each(|(record_key, record_value,)| {
                json_map.insert(
                   record_key
@@ -603,7 +642,20 @@ fn main_wrapper() -> Result<(),>
             },);
             let json_value : JsonValue = json_map.into();
             let json_string = serde_json::to_string(&json_value,)?;
-            println!("{}", json_string);
+            if config.get_str("run-mode",).unwrap_or_else(|_| "".into(),) == "foreground"
+            {
+               if verbose >= 3 && verbose < 7
+               {
+                  println!("{}", json_string);
+               }
+               else if verbose >= 7
+               {
+                  let json_string_pretty = serde_json::to_string_pretty(&json_value,)?;
+                  println!("{}", json_string_pretty);
+               }
+            }
+            let mut global_cursor_value = CURSOR.lock().unwrap();
+            *global_cursor_value = local_cursor_value.clone();
          },
       };
    }
