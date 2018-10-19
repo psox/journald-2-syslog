@@ -40,7 +40,7 @@ use serde_json::{
 };
 
 use serde_yaml::{
-   from_reader as yaml_from_reader,
+   from_str as yaml_from_str,
    to_string as to_yaml_string,
    to_writer as yaml_to_writer,
    Value as YamlValue,
@@ -49,6 +49,12 @@ use serde_yaml::{
 use std::{
    collections::BTreeMap,
    fs::OpenOptions,
+   io::{
+      Read,
+      Seek,
+      SeekFrom,
+      Write,
+   },
    iter::FromIterator,
    path::Path,
    result::Result as StdResult,
@@ -66,7 +72,6 @@ use systemd::journal::{
 };
 
 type Result<T,> = StdResult<T, FailError,>;
-// type YamlResult<T,> = serde_yaml::Result<T,>;
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 struct CursorRecord
@@ -83,14 +88,17 @@ fn read_write_cursor_thread(
    cursor_exists : &mpsc::Sender<bool,>,
 )
 {
-   let cursor_file = OpenOptions::new()
+   let mut cursor_file = OpenOptions::new()
       .read(true,)
       .write(true,)
       .create(true,)
       .open(&path,)
       .unwrap_or_else(|error| panic!("{:#?}\nwhile trying to open file: {}", error, &path),);
+   let mut yaml_string = String::default();
    let mut old_cursor_value = CursorRecord::default();
-   let mut local_cursor_value : CursorRecord = yaml_from_reader(&cursor_file,).unwrap_or_default();
+   cursor_file.seek(SeekFrom::Start(0,),).unwrap_or_default();
+   cursor_file.read_to_string(&mut yaml_string,).unwrap();
+   let mut local_cursor_value : CursorRecord = yaml_from_str(&yaml_string,).unwrap_or_default();
    if local_cursor_value != old_cursor_value
    {
       let mut global_cursor_value = CURSOR
@@ -118,8 +126,10 @@ fn read_write_cursor_thread(
       }
       if local_cursor_value != old_cursor_value
       {
+         cursor_file.seek(SeekFrom::Start(0,),).unwrap_or_default();
          cursor_file.set_len(0,).unwrap_or_default();
          yaml_to_writer(&cursor_file, &local_cursor_value,).unwrap_or((),);
+         cursor_file.write(b"\n",).unwrap_or_default();
          old_cursor_value = local_cursor_value;
       }
    }
@@ -267,6 +277,13 @@ fn get_command_line_args() -> Result<Config,>
             .required_unless_one(&["daemon", "foreground", "print-config",],)
             .conflicts_with_all(&["daemon", "foreground", "print-config",],)
             .help("List the config files used by this application.",),
+         Arg::with_name("last-cursor-location",)
+            .long("last-cursor-location",)
+            .alias("lcl",)
+            .visible_alias("cursor",)
+            .short("l",)
+            .takes_value(true,)
+            .help("Path to the yaml file containing cursor of the last message passed",),
          Arg::with_name("host-name",)
             .long("host-name",)
             .visible_alias("hn",)
@@ -352,7 +369,7 @@ fn get_command_line_args() -> Result<Config,>
          {
             config.set("run-mode", ConfigValue::from(arg_name.to_string(),),)?;
          },
-         "host-name" | "host-type" | "host-protocol" =>
+         "host-name" | "host-type" | "host-protocol" | "last-cursor-location" =>
          {
             config.set(
                arg_name,
@@ -432,9 +449,6 @@ fn main_wrapper() -> Result<(),>
    let cursor_location_file = config.get_str("last-cursor-location",)?;
    let (cursor_exists_sender, cursor_exists_receiver,) = mpsc::channel::<bool,>();
    let thread_builder = thread::Builder::new().name("read_write_cursor_thread".into(),);
-   let _join_handle = thread_builder.spawn(move || {
-      read_write_cursor_thread(cursor_location_file.as_str(), &cursor_exists_sender,)
-   },);
 
    if verbose >= 5
    {
@@ -462,6 +476,10 @@ fn main_wrapper() -> Result<(),>
 
       return Ok((),);
    }
+
+   let _join_handle = thread_builder.spawn(move || {
+      read_write_cursor_thread(cursor_location_file.as_str(), &cursor_exists_sender,)
+   },);
 
    let mut journal = Journal::open(JournalFiles::All, false, true,)?;
 
@@ -620,15 +638,18 @@ fn main_wrapper() -> Result<(),>
                .unwrap_or_else(|_| Utc::now().into(),)
                .into();
             let timestamp_str = timestamp.to_rfc3339().replace("+00:00", "Z",);
-            let cursor = journal.cursor().unwrap_or_default();
-            if cursor == String::default()
+            local_cursor_value.position = journal.cursor().unwrap_or_default();
+            if local_cursor_value == CursorRecord::default()
             {
                continue;
             }
             let mut json_map = JsonMap::new();
             json_map.insert("@timestamp".into(), timestamp_str.clone().into(),);
             json_map.insert("journald.timestamp".into(), timestamp_str.into(),);
-            json_map.insert("journald.cursor".into(), cursor.clone().into(),);
+            json_map.insert(
+               "journald.cursor".into(),
+               local_cursor_value.position.clone().into(),
+            );
             record.into_iter().for_each(|(record_key, record_value,)| {
                json_map.insert(
                   record_key
