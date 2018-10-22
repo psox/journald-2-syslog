@@ -56,6 +56,11 @@ use std::{
       Write,
    },
    iter::FromIterator,
+   net::{
+      IpAddr,
+      SocketAddr,
+      TcpStream,
+   },
    path::Path,
    result::Result as StdResult,
    sync::{
@@ -79,8 +84,54 @@ struct CursorRecord
    position : String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+struct HostRecord
+{
+   host :     String,
+   port :     u16,
+   protocol : String,
+}
+
 lazy_static! {
    static ref CURSOR: StdMutex<CursorRecord,> = StdMutex::new(CursorRecord::default());
+}
+
+fn send_json_to_remote_host(
+   connection : &HostRecord,
+   journal_entry : &mpsc::Receiver<JsonValue,>,
+)
+{
+   loop
+   {
+      let ip : IpAddr = connection
+         .host
+         .parse()
+         .unwrap_or_else(|_| "127.0.0.1".parse().unwrap(),);
+      let address = SocketAddr::new(ip, connection.port,);
+      let stream_result = TcpStream::connect(&address,);
+      if let Ok(mut stream,) = stream_result
+      {
+         loop
+         {
+            let entry_result = journal_entry.recv();
+            match entry_result
+            {
+               Ok(value,) =>
+               {
+                  let entry_json_string = value.to_string();
+                  let write_result = stream.write_fmt(format_args!("{}\n", entry_json_string),);
+                  match write_result
+                  {
+                     Ok((),) => (),
+                     _ => break,
+                  }
+               },
+               _ => break,
+            }
+         }
+      }
+      thread::sleep(Duration::seconds(17,).to_std().unwrap(),);
+   }
 }
 
 fn read_write_cursor_thread(
@@ -138,7 +189,7 @@ fn read_write_cursor_thread(
 fn get_configs(command_line_args : Config) -> Result<Config,>
 {
    // Load the default config file
-   let default_yaml_config = include_str!("defaults.yaml");
+   let default_yaml_config = include_str!("../configs/defaults.yaml");
 
    // Set to collect active config files
    let active_paths : BTreeMap<String, isize,>;
@@ -448,6 +499,7 @@ fn main_wrapper() -> Result<(),>
    let mut local_cursor_value = CursorRecord::default();
    let cursor_location_file = config.get_str("last-cursor-location",)?;
    let (cursor_exists_sender, cursor_exists_receiver,) = mpsc::channel::<bool,>();
+   let (json_value_sender, json_value_receiver,) = mpsc::channel::<JsonValue,>();
    let thread_builder = thread::Builder::new().name("read_write_cursor_thread".into(),);
 
    if verbose >= 5
@@ -477,9 +529,26 @@ fn main_wrapper() -> Result<(),>
       return Ok((),);
    }
 
-   let _join_handle = thread_builder.spawn(move || {
+   let _cursor_tread = thread_builder.spawn(move || {
       read_write_cursor_thread(cursor_location_file.as_str(), &cursor_exists_sender,)
    },);
+
+   let remote_host = HostRecord {
+      host :     config
+         .get_str("host-name",)
+         .unwrap_or_else(|_| "127.0.0.1".to_string(),),
+      port :     config
+         .get_int("host-port",)
+         .unwrap_or(9000,)
+         .to_string()
+         .parse::<u16>()
+         .unwrap(),
+      protocol : config
+         .get_str("host-protocol",)
+         .unwrap_or_else(|_| "tcp".to_string(),),
+   };
+   let _network_thread =
+      thread::spawn(move || send_json_to_remote_host(&remote_host, &json_value_receiver,),);
 
    let mut journal = Journal::open(JournalFiles::All, false, true,)?;
 
@@ -662,17 +731,24 @@ fn main_wrapper() -> Result<(),>
                );
             },);
             let json_value : JsonValue = json_map.into();
-            let json_string = serde_json::to_string(&json_value,)?;
+            json_value_sender
+               .send(json_value.clone(),)
+               .unwrap_or_default();
             if config.get_str("run-mode",).unwrap_or_else(|_| "".into(),) == "foreground"
             {
-               if verbose >= 3 && verbose < 7
+               match verbose
                {
-                  println!("{}", json_string);
-               }
-               else if verbose >= 7
-               {
-                  let json_string_pretty = serde_json::to_string_pretty(&json_value,)?;
-                  println!("{}", json_string_pretty);
+                  3 | 4 | 5 | 6 =>
+                  {
+                     let json_string = serde_json::to_string(&json_value,)?;
+                     println!("{}", json_string);
+                  },
+                  7 | 8 | 9 =>
+                  {
+                     let json_string_pretty = serde_json::to_string_pretty(&json_value,)?;
+                     println!("{}", json_string_pretty);
+                  },
+                  _ => (),
                }
             }
             let mut global_cursor_value = CURSOR.lock().unwrap();
