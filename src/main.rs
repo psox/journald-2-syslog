@@ -152,11 +152,15 @@ fn read_write_cursor_thread(
    let mut local_cursor_value : CursorRecord = yaml_from_str(&yaml_string,).unwrap_or_default();
    if local_cursor_value != old_cursor_value
    {
-      let mut global_cursor_value = CURSOR
-         .lock()
-         .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
-         .unwrap();
-      *global_cursor_value = local_cursor_value.clone();
+      {
+         eprint!(" -> Lock Take: {}:{}", file!(), line!());
+         let mut global_cursor_value = CURSOR
+            .lock()
+            .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
+            .unwrap();
+         *global_cursor_value = local_cursor_value.clone();
+      }
+      eprintln!(" <- Lock Give: {}:{}", file!(), line!());
       old_cursor_value = local_cursor_value.clone();
       cursor_exists.send(true,).unwrap();
    }
@@ -168,12 +172,17 @@ fn read_write_cursor_thread(
    {
       thread::sleep(Duration::seconds(3,).to_std().unwrap(),);
       {
-         let global_cursor_value = CURSOR
-            .lock()
-            .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
-            .unwrap()
-            .clone();
-         local_cursor_value = global_cursor_value;
+         {
+            eprint!(" -> Lock Take: {}:{}", file!(), line!());
+
+            let global_cursor_value = CURSOR
+               .lock()
+               .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
+               .unwrap()
+               .clone();
+            local_cursor_value = global_cursor_value;
+         }
+         eprintln!(" <- Lock Give: {}:{}", file!(), line!());
       }
       if local_cursor_value != old_cursor_value
       {
@@ -550,17 +559,21 @@ fn main_wrapper() -> Result<(),>
    let _network_thread =
       thread::spawn(move || send_json_to_remote_host(&remote_host, &json_value_receiver,),);
 
-   let mut journal = Journal::open(JournalFiles::All, false, true,)?;
+   let mut journal = Journal::open(JournalFiles::All, false, false,)?;
 
    // Seek to an appropriate postion if the cursor is not set
    if cursor_exists_receiver.recv().unwrap()
    {
-      let global_cursor_value = CURSOR.lock().unwrap().clone();;
-      local_cursor_value.position = journal
-         .seek(JournalSeek::Cursor {
-            cursor : global_cursor_value.position,
-         },)
-         .unwrap_or_default();
+      {
+         eprint!(" -> Lock Take: {}:{}", file!(), line!());
+         let global_cursor_value = CURSOR.lock().unwrap().clone();;
+         local_cursor_value.position = journal
+            .seek(JournalSeek::Cursor {
+               cursor : global_cursor_value.position,
+            },)
+            .unwrap_or_default();
+      }
+      eprintln!(" <- Lock Give: {}:{}", file!(), line!());
    }
    else
    {
@@ -751,8 +764,12 @@ fn main_wrapper() -> Result<(),>
                   _ => (),
                }
             }
-            let mut global_cursor_value = CURSOR.lock().unwrap();
-            *global_cursor_value = local_cursor_value.clone();
+            {
+               eprint!(" -> Lock Take: {}:{}", file!(), line!());
+               let mut global_cursor_value = CURSOR.lock().unwrap();
+               *global_cursor_value = local_cursor_value.clone();
+            }
+            eprintln!(" <- Lock Give: {}:{}", file!(), line!());
          },
       };
    }
