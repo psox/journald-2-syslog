@@ -3,10 +3,12 @@
 #![warn(clippy::all)]
 
 #[macro_use]
-extern crate lazy_static;
+extern crate serde_derive;
 
 #[macro_use]
-extern crate serde_derive;
+extern crate lazy_static;
+
+mod jd_config;
 
 use chrono::{
    DateTime,
@@ -71,124 +73,12 @@ use systemd::journal::{
    JournalSeek,
 };
 
+use jd_config::JDConfig;
+
 type Result<T,> = StdResult<T, FailError,>;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-enum ProtocolType
-{
-   UDP,
-   TCP,
-}
-
-impl Default for ProtocolType
-{
-   fn default() -> ProtocolType
-   {
-      ProtocolType::TCP
-   }
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-enum History
-{
-   Duration(String,),
-   Absolute(String,),
-   Count(i64,),
-}
-
-impl Default for History
-{
-   fn default() -> History
-   {
-      History::Count(-1,)
-   }
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-enum RunType
-{
-   Foreground,
-   Daemon,
-   Print,
-   List,
-}
-
-impl Default for RunType
-{
-   fn default() -> RunType
-   {
-      RunType::Print
-   }
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-enum TargetType
-{
-   Filebeat,
-}
-
-impl Default for TargetType
-{
-   fn default() -> TargetType
-   {
-      TargetType::Filebeat
-   }
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-struct TargetRecord
-{
-   address :  String,
-   port :     u32,
-   protocol : ProtocolType,
-   target :   TargetType,
-}
-
-impl Default for TargetRecord
-{
-   fn default() -> TargetRecord
-   {
-      TargetRecord {
-         address :  "127.0.0.1".to_string(),
-         port :     9000,
-         protocol : ProtocolType::default(),
-         target :   TargetType::default(),
-      }
-   }
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-struct JDConfig
-{
-   configs :  Vec<String,>,
-   verbose :  isize,
-   state :    String,
-   run_type : RunType,
-   history :  History,
-   targets :  Vec<TargetRecord,>,
-}
-
-impl Default for JDConfig
-{
-   fn default() -> JDConfig
-   {
-      JDConfig {
-         configs :  vec![
-            "/usr/share/journaldeliver/default.yaml".to_string(),
-            "/var/lib/journaldeliver/default.yaml".to_string(),
-            "/etc/journaldeliver/default.yaml".to_string(),
-         ],
-         verbose :  1,
-         state :    "/var/lib/journaldeliver/cursor-location.yaml".to_string(),
-         run_type : RunType::default(),
-         history :  History::default(),
-         targets :  vec![TargetRecord::default()],
-      }
-   }
-}
-
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-struct CursorRecord
+pub struct CursorRecord
 {
    position : String,
 }
