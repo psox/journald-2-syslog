@@ -5,17 +5,14 @@ authors = ["Andre Stemmet <andre.stemmet@jci.com>"]
 edition = "2018"
 
 [dependencies]
-chrono = "0.4.6"
-clap = "2.32.0"
+chrono = { version = "0.4.6", features = ["serde"] }
+clap =  "2.32.0"
 config = "0.9.1"
 failure = "0.1.3"
-lazy_static = "1.1.0"
-notify = "4.0.6"
 parse_duration = "1.0.1"
 serde = "1.0.80"
 serde_derive = "1.0.80"
 serde_json = "1.0.32"
 serde_yaml = "0.8.6"
-syslog = "4.0.1"
 systemd = "0.3.0"
 

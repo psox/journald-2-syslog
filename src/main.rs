@@ -3,9 +3,6 @@
 #![warn(clippy::all)]
 
 #[macro_use]
-extern crate lazy_static;
-
-#[macro_use]
 extern crate serde_derive;
 
 use chrono::{
@@ -63,16 +60,18 @@ use std::{
    },
    path::Path,
    result::Result as StdResult,
-   sync::{
-      mpsc,
-      Mutex as StdMutex,
-   },
+   sync::mpsc,
    thread,
+   time::{
+      Duration as StdDuration,
+      Instant as StdInstant,
+   },
 };
 
 use systemd::journal::{
    Journal,
    JournalFiles,
+   JournalRecord,
    JournalSeek,
 };
 
@@ -90,10 +89,6 @@ struct HostRecord
    host :     String,
    port :     u16,
    protocol : String,
-}
-
-lazy_static! {
-   static ref CURSOR: StdMutex<CursorRecord,> = StdMutex::new(CursorRecord::default());
 }
 
 fn send_json_to_remote_host(
@@ -136,61 +131,38 @@ fn send_json_to_remote_host(
 
 fn read_write_cursor_thread(
    path : &str,
-   cursor_exists : &mpsc::Sender<bool,>,
+   cursor_sender : &mpsc::Sender<CursorRecord,>,
+   cursor_receiver : &mpsc::Receiver<CursorRecord,>,
 )
 {
+   let mut pit = StdInstant::now();
+   let mut yaml_string = String::default();
+
+   // Open cursor file
    let mut cursor_file = OpenOptions::new()
       .read(true,)
       .write(true,)
       .create(true,)
       .open(&path,)
       .unwrap_or_else(|error| panic!("{:#?}\nwhile trying to open file: {}", error, &path),);
-   let mut yaml_string = String::default();
-   let mut old_cursor_value = CursorRecord::default();
    cursor_file.seek(SeekFrom::Start(0,),).unwrap_or_default();
    cursor_file.read_to_string(&mut yaml_string,).unwrap();
+
    let mut local_cursor_value : CursorRecord = yaml_from_str(&yaml_string,).unwrap_or_default();
-   if local_cursor_value != old_cursor_value
-   {
-      {
-         eprint!(" -> Lock Take: {}:{}", file!(), line!());
-         let mut global_cursor_value = CURSOR
-            .lock()
-            .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
-            .unwrap();
-         *global_cursor_value = local_cursor_value.clone();
-      }
-      eprintln!(" <- Lock Give: {}:{}", file!(), line!());
-      old_cursor_value = local_cursor_value.clone();
-      cursor_exists.send(true,).unwrap();
-   }
-   else
-   {
-      cursor_exists.send(false,).unwrap();
-   }
+   cursor_sender.send(local_cursor_value.clone(),).unwrap();
    loop
    {
-      thread::sleep(Duration::seconds(3,).to_std().unwrap(),);
+      if let Ok(cursor,) = cursor_receiver.recv()
       {
-         {
-            eprint!(" -> Lock Take: {}:{}", file!(), line!());
-
-            let global_cursor_value = CURSOR
-               .lock()
-               .map_err(|_| "Unable to obtain mutex lock on journald cursor",)
-               .unwrap()
-               .clone();
-            local_cursor_value = global_cursor_value;
-         }
-         eprintln!(" <- Lock Give: {}:{}", file!(), line!());
+         local_cursor_value = cursor;
       }
-      if local_cursor_value != old_cursor_value
+      if pit.elapsed() > StdDuration::from_millis(1234,)
       {
          cursor_file.seek(SeekFrom::Start(0,),).unwrap_or_default();
          cursor_file.set_len(0,).unwrap_or_default();
          yaml_to_writer(&cursor_file, &local_cursor_value,).unwrap_or((),);
          cursor_file.write(b"\n",).unwrap_or_default();
-         old_cursor_value = local_cursor_value;
+         pit = StdInstant::now();
       }
    }
 }
@@ -507,8 +479,9 @@ fn main_wrapper() -> Result<(),>
    let verbose = config.get_int("verbose",).unwrap_or(0,);
    let mut local_cursor_value = CursorRecord::default();
    let cursor_location_file = config.get_str("last-cursor-location",)?;
-   let (cursor_exists_sender, cursor_exists_receiver,) = mpsc::channel::<bool,>();
    let (json_value_sender, json_value_receiver,) = mpsc::channel::<JsonValue,>();
+   let (cursor_exists_sender, cursor_exists_receiver,) = mpsc::channel::<CursorRecord,>();
+   let (cursor_value_sender, cursor_value_receiver,) = mpsc::channel::<CursorRecord,>();
    let thread_builder = thread::Builder::new().name("read_write_cursor_thread".into(),);
 
    if verbose >= 5
@@ -539,7 +512,11 @@ fn main_wrapper() -> Result<(),>
    }
 
    let _cursor_tread = thread_builder.spawn(move || {
-      read_write_cursor_thread(cursor_location_file.as_str(), &cursor_exists_sender,)
+      read_write_cursor_thread(
+         cursor_location_file.as_str(),
+         &cursor_exists_sender,
+         &cursor_value_receiver,
+      )
    },);
 
    let remote_host = HostRecord {
@@ -562,29 +539,24 @@ fn main_wrapper() -> Result<(),>
    let mut journal = Journal::open(JournalFiles::All, false, false,)?;
 
    // Seek to an appropriate postion if the cursor is not set
-   if cursor_exists_receiver.recv().unwrap()
+   if let Ok(cursor,) = cursor_exists_receiver.recv()
    {
-      {
-         eprint!(" -> Lock Take: {}:{}", file!(), line!());
-         let global_cursor_value = CURSOR.lock().unwrap().clone();;
-         local_cursor_value.position = journal
-            .seek(JournalSeek::Cursor {
-               cursor : global_cursor_value.position,
-            },)
-            .unwrap_or_default();
-      }
-      eprintln!(" <- Lock Give: {}:{}", file!(), line!());
+      local_cursor_value = cursor;
    }
-   else
+   if local_cursor_value == CursorRecord::default()
    {
       match config.get_str("history-type",)?.as_str()
       {
          "duration" =>
-         // TODO: This logic may not work
          {
             let duration = Duration::from_std(parse_duration(
                config.get_str("history-duration",)?.as_str(),
             )?,)?;
+
+            if verbose > 1
+            {
+               eprintln!("   Seek Duration: {:?}", duration);
+            }
 
             if duration != Duration::seconds(0,)
             {
@@ -606,9 +578,8 @@ fn main_wrapper() -> Result<(),>
             {
                journal.seek(JournalSeek::Tail,)?;
             }
-         }
+         },
          "absolute" =>
-         // TODO: This logic may not work
          {
             let absolute = config
                .get_str("history-absolute",)?
@@ -619,14 +590,23 @@ fn main_wrapper() -> Result<(),>
                .parse::<u64>()?
                * 1_000_000;
 
+            if verbose > 1
+            {
+               eprintln!("   Seek Absolute: {:?}", absolute);
+            }
+
             journal.seek(JournalSeek::ClockRealtime {
                usec : absolute,
             },)?;
-         }
-         // TODO:  Verify this works
+         },
          "count" =>
          {
             let count : i64 = config.get_int("history-count",)?;
+
+            if verbose > 1
+            {
+               eprintln!("   Seek Records: {:?}", count);
+            }
 
             if count > 0
             {
@@ -688,33 +668,19 @@ fn main_wrapper() -> Result<(),>
          history_type => panic!("{} is not a valid history-type!", history_type),
       }
    }
+   let mut record_option : Option<JournalRecord,> = None;
    loop
    {
-      let mut broken_count : i64 = 0;
-      let record_option = journal.await_next_record(None,).unwrap_or_else(|_| {
-         // See comment v below v
-         thread::sleep(Duration::seconds(7,).to_std().unwrap(),);
-         broken_count += 1;
-         None
-      },);
       match record_option
       {
          None =>
          {
-            // This implies number of days from Duration::seconds(^ see above ^)
-            if broken_count > 86400
-            {
-               break;
-            }
-            else
-            {
-               continue;
-            }
+            record_option = journal.await_next_record(None,).unwrap_or_else(|_| None,);
+            continue;
          },
-         Some(record,) =>
+         Some(journal_record,) =>
          {
-            #[allow(unused_assignments)]
-            broken_count = 0;
+            let record = journal_record.clone();
             let timestamp : DateTime<Utc,> = journal
                .timestamp()
                .unwrap_or_else(|_| Utc::now().into(),)
@@ -740,7 +706,7 @@ fn main_wrapper() -> Result<(),>
                      .trim_left_matches('.',)
                      .replace("source", "originator",)
                      .replace("message.", "originator.",),
-                  record_value.into(),
+                  record_value.as_str().into(),
                );
             },);
             let json_value : JsonValue = json_map.into();
@@ -764,17 +730,13 @@ fn main_wrapper() -> Result<(),>
                   _ => (),
                }
             }
-            {
-               eprint!(" -> Lock Take: {}:{}", file!(), line!());
-               let mut global_cursor_value = CURSOR.lock().unwrap();
-               *global_cursor_value = local_cursor_value.clone();
-            }
-            eprintln!(" <- Lock Give: {}:{}", file!(), line!());
+            cursor_value_sender
+               .send(local_cursor_value.clone(),)
+               .unwrap_or_default();
          },
-      };
+      }
+      record_option = journal.next_record().unwrap_or_else(|_| None,);
    }
-
-   Ok((),)
 }
 
 fn main()
