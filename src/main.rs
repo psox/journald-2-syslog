@@ -71,7 +71,6 @@ use std::{
 use systemd::journal::{
    Journal,
    JournalFiles,
-   JournalRecord,
    JournalSeek,
 };
 
@@ -668,74 +667,77 @@ fn main_wrapper() -> Result<(),>
          history_type => panic!("{} is not a valid history-type!", history_type),
       }
    }
-   let mut record_option : Option<JournalRecord,> = None;
-   loop
+
+   loop 
    {
-      match record_option
+      let candidate = journal.next_record()?;
+      let record = match candidate 
       {
-         None =>
-         {
-            record_option = journal.await_next_record(None,).unwrap_or_else(|_| None,);
-            continue;
-         },
-         Some(journal_record,) =>
-         {
-            let record = journal_record.clone();
-            let timestamp : DateTime<Utc,> = journal
-               .timestamp()
-               .unwrap_or_else(|_| Utc::now().into(),)
-               .into();
-            let timestamp_str = timestamp.to_rfc3339().replace("+00:00", "Z",);
-            local_cursor_value.position = journal.cursor().unwrap_or_default();
-            if local_cursor_value == CursorRecord::default()
+         Some(matched_record) => matched_record,
+         None => 
+         { 
+            loop 
             {
-               continue;
-            }
-            let mut json_map = JsonMap::new();
-            json_map.insert("@timestamp".into(), timestamp_str.clone().into(),);
-            json_map.insert("journald.timestamp".into(), timestamp_str.into(),);
-            json_map.insert(
-               "journald.cursor".into(),
-               local_cursor_value.position.clone().into(),
-            );
-            record.into_iter().for_each(|(record_key, record_value,)| {
-               json_map.insert(
-                  record_key
-                     .replace("_", ".",)
-                     .to_lowercase()
-                     .trim_left_matches('.',)
-                     .replace("source", "originator",)
-                     .replace("message.", "originator.",),
-                  record_value.as_str().into(),
-               );
-            },);
-            let json_value : JsonValue = json_map.into();
-            json_value_sender
-               .send(json_value.clone(),)
-               .unwrap_or_default();
-            if config.get_str("run-mode",).unwrap_or_else(|_| "".into(),) == "foreground"
-            {
-               match verbose
+               if let Some(matched_record) = journal.await_next_record(None)? 
                {
-                  3 | 4 | 5 | 6 =>
-                  {
-                     let json_string = serde_json::to_string(&json_value,)?;
-                     println!("{}", json_string);
-                  },
-                  7 | 8 | 9 =>
-                  {
-                     let json_string_pretty = serde_json::to_string_pretty(&json_value,)?;
-                     println!("{}", json_string_pretty);
-                  },
-                  _ => (),
+                  break matched_record;
                }
             }
-            cursor_value_sender
+         }
+      };
+
+      local_cursor_value.position = journal.cursor().unwrap_or_default();
+      if  local_cursor_value != CursorRecord::default()
+      {
+         let timestamp : DateTime<Utc,> = journal
+            .timestamp()
+            .unwrap_or_else(|_| Utc::now().into(),)
+            .into();    
+         let timestamp_str = timestamp.to_rfc3339().replace("+00:00", "Z",);
+         let mut json_map = JsonMap::new();
+         json_map.insert("@timestamp".into(), timestamp_str.clone().into(),);
+         json_map.insert("journald.timestamp".into(), timestamp_str.into(),);
+         json_map.insert(
+            "journald.cursor".into(),
+            local_cursor_value.position.clone().into(),
+         );
+         record.into_iter().for_each(|(record_key, record_value,)| 
+         {
+            json_map.insert(
+                     record_key
+                        .replace("_", ".",)
+                        .to_lowercase()
+                        .trim_left_matches('.',)
+                        .replace("source", "originator",)
+                        .replace("message.", "originator.",),
+                     record_value.as_str().into(),
+                  );
+         },);
+         let json_value : JsonValue = json_map.into();
+         json_value_sender
+               .send(json_value.clone(),)
+               .unwrap_or_default();
+         cursor_value_sender
                .send(local_cursor_value.clone(),)
                .unwrap_or_default();
-         },
+         if config.get_str("run-mode",).unwrap_or_else(|_| "".into(),) == "foreground"
+         {
+            match verbose
+            {
+               3 | 4 | 5 | 6 =>
+               {
+                  let json_string = serde_json::to_string(&json_value,)?;
+                  println!("{}", json_string);
+               },
+               7 | 8 | 9 =>
+               {
+                  let json_string_pretty = serde_json::to_string_pretty(&json_value,)?;
+                  println!("{}", json_string_pretty);
+               },
+               _ => (),
+            }
+         }
       }
-      record_option = journal.next_record().unwrap_or_else(|_| None,);
    }
 }
 
