@@ -49,6 +49,12 @@ use std::{
    time::{Duration as StdDuration, Instant as StdInstant},
 };
 
+use nix::{
+   libc::{c_int, getrusage, rusage, timeval, RUSAGE_SELF},
+   sys::wait::{waitpid, WaitPidFlag},
+   unistd::{fork, ForkResult, Pid},
+};
+
 use systemd::journal::{Journal, JournalFiles, JournalSeek};
 
 type Result<T> = StdResult<T, FailError>;
@@ -82,7 +88,6 @@ fn send_json_to_remote_host(connection: &HostRecord, journal_entry: &mpsc::Recei
                   let write_result = stream.write_fmt(format_args!("{}\n", entry_json_string));
                   match write_result {
                      Ok(()) => (),
-
                      _ => break,
                   }
                }
@@ -111,19 +116,57 @@ fn read_write_cursor_thread(
       .unwrap_or_else(|error| panic!("{:#?}\nwhile trying to open file: {}", error, &path));
    cursor_file.seek(SeekFrom::Start(0)).unwrap_or_default();
    cursor_file.read_to_string(&mut yaml_string).unwrap();
-
+   let mut written_cursor_value = CursorRecord::default();
    let mut local_cursor_value: CursorRecord = yaml_from_str(&yaml_string).unwrap_or_default();
    cursor_sender.send(local_cursor_value.clone()).unwrap();
+   let mut old_value = 0;
    loop {
-      if let Ok(cursor) = cursor_receiver.recv() {
+      if let Ok(cursor) = cursor_receiver.recv_timeout(StdDuration::from_millis(1235)) {
          local_cursor_value = cursor;
+
+         if pit.elapsed() > StdDuration::from_millis(1234)
+            && written_cursor_value != local_cursor_value
+         {
+            cursor_file.seek(SeekFrom::Start(0)).unwrap_or_default();
+            cursor_file.set_len(0).unwrap_or_default();
+            yaml_to_writer(&cursor_file, &local_cursor_value).unwrap_or(());
+            cursor_file.write(b"\n").unwrap_or_default();
+            pit = StdInstant::now();
+            written_cursor_value = local_cursor_value;
+         }
       }
-      if pit.elapsed() > StdDuration::from_millis(1234) {
-         cursor_file.seek(SeekFrom::Start(0)).unwrap_or_default();
-         cursor_file.set_len(0).unwrap_or_default();
-         yaml_to_writer(&cursor_file, &local_cursor_value).unwrap_or(());
-         cursor_file.write(b"\n").unwrap_or_default();
-         pit = StdInstant::now();
+      let mut stats = rusage {
+         ru_utime: timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+         },
+         ru_stime: timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+         },
+         ru_maxrss: 0,
+         ru_ixrss: 0,
+         ru_idrss: 0,
+         ru_isrss: 0,
+         ru_minflt: 0,
+         ru_majflt: 0,
+         ru_nswap: 0,
+         ru_inblock: 0,
+         ru_oublock: 0,
+         ru_msgsnd: 0,
+         ru_msgrcv: 0,
+         ru_nsignals: 0,
+         ru_nvcsw: 0,
+         ru_nivcsw: 0,
+      };
+      let stats_ptr: *mut rusage = &mut stats;
+      let mut usage_result: c_int;
+      unsafe {
+         usage_result = getrusage(RUSAGE_SELF, stats_ptr);
+      }
+      if usage_result == 0 && old_value != stats.ru_maxrss {
+         eprintln!("{}", stats.ru_maxrss);
+         old_value = stats.ru_maxrss;
       }
    }
 }
@@ -424,7 +467,6 @@ fn main_wrapper() -> Result<()> {
    let (json_value_sender, json_value_receiver) = mpsc::channel::<JsonValue>();
    let (cursor_exists_sender, cursor_exists_receiver) = mpsc::channel::<CursorRecord>();
    let (cursor_value_sender, cursor_value_receiver) = mpsc::channel::<CursorRecord>();
-   let thread_builder = thread::Builder::new().name("read_write_cursor_thread".into());
 
    if verbose >= 5 {
       eprintln!("{:#?}", config);
@@ -449,14 +491,6 @@ fn main_wrapper() -> Result<()> {
       return Ok(());
    }
 
-   let _cursor_tread = thread_builder.spawn(move || {
-      read_write_cursor_thread(
-         cursor_location_file.as_str(),
-         &cursor_exists_sender,
-         &cursor_value_receiver,
-      )
-   });
-
    let remote_host = HostRecord {
       host: config
          .get_str("host-name")
@@ -471,16 +505,23 @@ fn main_wrapper() -> Result<()> {
          .get_str("host-protocol")
          .unwrap_or_else(|_| "tcp".to_string()),
    };
-   let _network_thread =
-      thread::spawn(move || send_json_to_remote_host(&remote_host, &json_value_receiver));
 
-   let mut journal = Journal::open(JournalFiles::All, false, false)?;
+   thread::spawn(move || {
+      read_write_cursor_thread(
+         cursor_location_file.as_str(),
+         &cursor_exists_sender,
+         &cursor_value_receiver,
+      )
+   });
+
+   thread::spawn(move || send_json_to_remote_host(&remote_host, &json_value_receiver));
 
    // Seek to an appropriate postion if the cursor is not set
    if let Ok(cursor) = cursor_exists_receiver.recv() {
       local_cursor_value = cursor;
    }
    if local_cursor_value == CursorRecord::default() {
+      let mut journal = Journal::open(JournalFiles::All, false, false)?;
       match config.get_str("history-type")?.as_str() {
          "duration" => {
             let duration = Duration::from_std(parse_duration(
@@ -574,62 +615,72 @@ fn main_wrapper() -> Result<()> {
          }
          history_type => panic!("{} is not a valid history-type!", history_type),
       }
+      local_cursor_value.position = journal.cursor()?;
    }
-
    loop {
-      let candidate = journal.next_record()?;
-      let record = match candidate {
-         Some(matched_record) => matched_record,
-         None => loop {
-            if let Some(matched_record) = journal.await_next_record(None)? {
-               break matched_record;
-            }
-         },
-      };
+      let mut journal = Journal::open(JournalFiles::All, false, false)?;
+      journal
+         .seek(JournalSeek::Cursor {
+            cursor: local_cursor_value.position.clone(),
+         })
+         .unwrap_or_default();
 
-      local_cursor_value.position = journal.cursor().unwrap_or_default();
-      if local_cursor_value != CursorRecord::default() {
-         let timestamp: DateTime<Utc> = journal
-            .timestamp()
-            .unwrap_or_else(|_| Utc::now().into())
-            .into();
-         let timestamp_str = timestamp.to_rfc3339().replace("+00:00", "Z");
-         let mut json_map = JsonMap::new();
-         json_map.insert("@timestamp".into(), timestamp_str.clone().into());
-         json_map.insert("journald.timestamp".into(), timestamp_str.into());
-         json_map.insert(
-            "journald.cursor".into(),
-            local_cursor_value.position.clone().into(),
-         );
-         record.into_iter().for_each(|(record_key, record_value)| {
+      // need to do this because journald does not cleanup after itself
+      for _ in 0..10000 {
+         let candidate = journal.next_record()?;
+         let record = match candidate {
+            Some(matched_record) => matched_record,
+            None => loop {
+               if let Some(matched_record) = journal.await_next_record(None)? {
+                  break matched_record;
+               }
+            },
+         };
+
+         local_cursor_value.position = journal.cursor().unwrap_or_default();
+         if local_cursor_value != CursorRecord::default() {
+            let timestamp: DateTime<Utc> = journal
+               .timestamp()
+               .unwrap_or_else(|_| Utc::now().into())
+               .into();
+            let timestamp_str = timestamp.to_rfc3339().replace("+00:00", "Z");
+            let mut json_map = JsonMap::new();
+            json_map.insert("@timestamp".into(), timestamp_str.clone().into());
+            json_map.insert("journald.timestamp".into(), timestamp_str.into());
             json_map.insert(
-               record_key
-                  .replace("_", ".")
-                  .to_lowercase()
-                  .trim_left_matches('.')
-                  .replace("source", "originator")
-                  .replace("message.", "originator."),
-               record_value.as_str().into(),
+               "journald.cursor".into(),
+               local_cursor_value.position.clone().into(),
             );
-         });
-         let json_value: JsonValue = json_map.into();
-         json_value_sender
-            .send(json_value.clone())
-            .unwrap_or_default();
-         cursor_value_sender
-            .send(local_cursor_value.clone())
-            .unwrap_or_default();
-         if config.get_str("run-mode").unwrap_or_else(|_| "".into()) == "foreground" {
-            match verbose {
-               3 | 4 | 5 | 6 => {
-                  let json_string = serde_json::to_string(&json_value)?;
-                  println!("{}", json_string);
+            record.into_iter().for_each(|(record_key, record_value)| {
+               json_map.insert(
+                  record_key
+                     .replace("_", ".")
+                     .to_lowercase()
+                     .trim_left_matches('.')
+                     .replace("source", "originator")
+                     .replace("message.", "originator."),
+                  record_value.as_str().into(),
+               );
+            });
+            let json_value: JsonValue = json_map.into();
+            json_value_sender
+               .send(json_value.clone())
+               .unwrap_or_default();
+            cursor_value_sender
+               .send(local_cursor_value.clone())
+               .unwrap_or_default();
+            if config.get_str("run-mode").unwrap_or_else(|_| "".into()) == "foreground" {
+               match verbose {
+                  3 | 4 | 5 | 6 => {
+                     let json_string = serde_json::to_string(&json_value)?;
+                     println!("{}", json_string);
+                  }
+                  7 | 8 | 9 => {
+                     let json_string_pretty = serde_json::to_string_pretty(&json_value)?;
+                     println!("{}", json_string_pretty);
+                  }
+                  _ => (),
                }
-               7 | 8 | 9 => {
-                  let json_string_pretty = serde_json::to_string_pretty(&json_value)?;
-                  println!("{}", json_string_pretty);
-               }
-               _ => (),
             }
          }
       }
@@ -637,5 +688,18 @@ fn main_wrapper() -> Result<()> {
 }
 
 fn main() {
-   main_wrapper().unwrap();
+   let mut pid: Pid = Pid::from_raw(0);
+   loop {
+      match fork() {
+         Ok(ForkResult::Child) => main_wrapper().unwrap(),
+         Ok(ForkResult::Parent { child }) => pid = child,
+         _ => break,
+      }
+
+      loop {
+         match waitpid(pid, Some(WaitPidFlag::WEXITED)) {
+            Ok(Exited(_)) => break,
+            _ => ()
+         }
+   }
 }
