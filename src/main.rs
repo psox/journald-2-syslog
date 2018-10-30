@@ -844,11 +844,10 @@ fn main_wrapper() -> Result<(),>
                   record.into_iter().for_each(|(record_key, record_value,)| {
                      json_map.insert(
                         record_key
-                           .replace("_", ".",)
                            .to_lowercase()
-                           .trim_left_matches('.',)
-                           .replace("source", "originator",)
-                           .replace("message.", "originator.",),
+                           .replace("_", "-",)
+                           .trim_left_matches('-',)
+                           .replace("source", "originator",),
                         record_value.as_str().into(),
                      );
                   },);
