@@ -15,3 +15,6 @@ host-name: 127.0.0.1
 host-port: 9000
 host-type: filebeat
 host-protocol: tcp
+main-loop-count: 100000
+main-loop-time: 23h
+main-loop-message: 10000
