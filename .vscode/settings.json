@@ -1,8 +1,7 @@
 {
     "[rust]": {
         "editor.insertSpaces": true,
-        "editor.tabSize": 3,
-        "editor.detectIndentation": false
+        "editor.detectIndentation": true
     },
     "cSpell.words": [
         "Debounced",
@@ -49,5 +48,4 @@
     "files.autoSave": "afterDelay",
     "files.autoSaveDelay": 7000,
     "files.hotExit": "onExitAndWindowClose",
-    "projects.indentationSpaces": 3,
 }
