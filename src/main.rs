@@ -376,7 +376,7 @@ fn get_command_line_args() -> Result<Config> {
                 config.set(
                     arg_name,
                     ConfigValue::from(
-                        vals.into_iter()
+                        vals.iter()
                             .map(|config_path| ConfigValue::from(config_path.to_str().unwrap()))
                             .collect::<Vec<ConfigValue>>(),
                     ),
@@ -712,7 +712,7 @@ fn main_wrapper() -> Result<()> {
                                 record_key
                                     .to_lowercase()
                                     .replace("_", "-")
-                                    .trim_left_matches('-')
+                                    .trim_start_matches('-')
                                     .replace("source", "originator"),
                                 record_value.as_str().into(),
                             );
@@ -791,5 +791,5 @@ fn main_wrapper() -> Result<()> {
 
 // Purely here to catch an error and panic
 fn main() {
-    main_wrapper().unwrap();
+    main_wrapper().unwrap()
 }
